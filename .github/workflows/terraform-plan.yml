@@ -1,0 +1,50 @@
+name: terraform plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      dir: 
+        type: string
+        description: "working directory"
+        required: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  tf-plan:
+    runs-on: ubuntu-latest
+    name: ${{ matrix.images.name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: setup nix (with cachix)
+        uses: nxtcoder17/actions/setup-nix-github@v1
+        with:
+          flake_lock: "./flake.lock"
+          nix_develop_arguments: ".#default"
+
+      - name: running terraform http backend
+        run: |+
+          run dev &
+
+      - name: running tests
+        run: |+
+          run test:01-simple:plan
+
+      - name: now create a branch with the changes
+        run: |+
+          current_branch=$(git branch --show-current)
+
+          branch_name="gh-tf-IAC/${{ inputs.dir }}"
+          git switch -c "$branch_name"
+          git add .
+          git commit -m "(tf-plan): succeeded at $(date)"
+          git push -u origin $branch_name
+
+          echo "Now creates a PR to merge it to calling branch"
+          gh pr create \
+            --title "[terraform/IAC] approval for plan apply" \
+            --body "this PR once merged, audits, and tracks the terraform IAC changes made into ($current_branch) to the default branch"
