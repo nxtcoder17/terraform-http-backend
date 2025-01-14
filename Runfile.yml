@@ -1,0 +1,46 @@
+dotenv:
+- .secrets/env
+
+tasks:
+  build:
+    cmd:
+      - go build -o ./bin/tf-http .
+
+  decrypt:
+    cmd:
+      - ./bin/tf-http decrypt $(cat ./tests/01-simple/terraform-http.state.json)
+
+  dev:watch:
+    watch:
+      onlySuffixes:
+        - .go
+    cmd:
+      - run: build
+      - ./bin/tf-http --addr localhost:9999 serve
+
+  dev:
+    cmd:
+      - ./bin/tf-http --addr localhost:9999 serve
+
+  test:01-simple:
+    env:
+      TF_HTTP_ADDRESS: "http://localhost:9999/?dir=tests/01-simple"
+      TF_HTTP_LOCK_ADDRESS: "http://localhost:9999/?dir=tests/01-simple"
+      TF_HTTP_UNLOCK_ADDRESS: "http://localhost:9999/?dir=tests/01-simple"
+    dir: ./tests/01-simple
+    # interactive: true
+    cmd:
+      - terraform init
+      - terraform plan
+      - terraform apply -auto-approve
+
+  test:01-simple:delete:
+    env:
+      TF_HTTP_ADDRESS: "http://localhost:9999/?dir=tests/01-simple"
+      TF_HTTP_LOCK_ADDRESS: "http://localhost:9999/?dir=tests/01-simple"
+      TF_HTTP_UNLOCK_ADDRESS: "http://localhost:9999/?dir=tests/01-simple"
+    dir: ./tests/01-simple
+    # interactive: true
+    cmd:
+      - terraform plan -destroy
+      - terraform destroy -auto-approve
