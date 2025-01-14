@@ -20,9 +20,21 @@ tasks:
 
   dev:
     cmd:
+      - run: build
       - ./bin/tf-http --addr localhost:9999 serve
 
-  test:01-simple:
+  test:01-simple:plan:
+    env: &env
+      TF_HTTP_ADDRESS: "http://localhost:9999/?dir=tests/01-simple"
+      TF_HTTP_LOCK_ADDRESS: "http://localhost:9999/?dir=tests/01-simple"
+      TF_HTTP_UNLOCK_ADDRESS: "http://localhost:9999/?dir=tests/01-simple"
+    dir: ./tests/01-simple
+    # interactive: true
+    cmd:
+      - terraform init
+      - terraform plan
+
+  test:01-simple:apply:
     env:
       TF_HTTP_ADDRESS: "http://localhost:9999/?dir=tests/01-simple"
       TF_HTTP_LOCK_ADDRESS: "http://localhost:9999/?dir=tests/01-simple"

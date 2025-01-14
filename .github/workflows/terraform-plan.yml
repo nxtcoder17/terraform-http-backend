@@ -1,0 +1,99 @@
+name: terraform plan
+
+on:
+  workflow_dispatch:
+    inputs:
+      dir: 
+        type: string
+        description: "working directory"
+        required: true
+
+      terraform_version: 
+        description: 'Terraform Version'
+        required: true
+        default: 1.10.4
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # GITHUB_TF_BRANCH: tf-${{ inputs.dir }}
+  GITHUB_PR_TITLE: "[terraform/IAC] ${{ inputs.dir }}"
+
+jobs:
+  tf-plan:
+    runs-on: ubuntu-latest
+    name: ${{ matrix.images.name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: setup nix (with cachix)
+        uses: nxtcoder17/actions/setup-nix-github@v1
+        with:
+          flake_lock: "./flake.lock"
+          nix_develop_arguments: ".#default"
+
+      # - name: running terraform http backend
+      #   run: |+
+      #     run dev &
+
+      # - name: running tests
+      #   run: |+
+      #     terraform init
+      #     run test:01-simple:plan
+
+      - name: create a PR related to this
+        id: pr
+        shell: bash
+        run: |+
+          pr=(gh pr list --json title,id -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .id // \"No match\"")
+          if [ "$response" = "No Match" ]; then
+            gh pr create \
+              --title "$GITHUB_PR_TITLE" \
+              --body "this PR once merged, audits, and tracks the terraform IAC changes made into ($current_branch) to the default branch"
+
+            pr=(gh pr list --json title,id -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .id // \"No match\"")
+          fi
+
+          echo "pr_id=$pr" >> $GITHUB_OUTPUT
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+
+          terraform_wrapper: false
+
+      - name: Terraform Plan
+        id: plan
+        working-directory: ${{ inputs.dir }}
+        shell: bash
+        run: |
+          echo 'plan<<EOF' >> $GITHUB_OUTPUT
+          terraform plan -no-color -out=tfplan >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+
+      - name: Save Artifact
+        id: save-artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ steps.pr.outputs.pr_id }}-tf-plan
+          path: ${{ inputs.dir }}/tfplan
+
+      - name: Comment Plan
+        id: comment-plan
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          token: ${{ env.GITHUB_TOKEN }}
+          issue-number: ${{ steps.pr.outputs.pr_id }}
+          body: |
+            Terraform Plan:
+
+            ```
+            ${{ steps.plan.outputs.plan }}
+            ```
+
+            Plan has been saved to GH artifacts.
