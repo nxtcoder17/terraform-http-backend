@@ -14,8 +14,9 @@ on:
         default: 1.10.4
 
 permissions:
-  contents: read
   packages: write
+  contents: write
+  pull-requests: write
 
 env:
   GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -30,11 +31,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: setup nix (with cachix)
-        uses: nxtcoder17/actions/setup-nix-github@v1
-        with:
-          flake_lock: "./flake.lock"
-          nix_develop_arguments: ".#default"
+      # - name: setup nix (with cachix)
+      #   uses: nxtcoder17/actions/setup-nix-github@v1
+      #   with:
+      #     flake_lock: "./flake.lock"
+      #     nix_develop_arguments: ".#default"
 
       # - name: running terraform http backend
       #   run: |+
@@ -44,28 +45,57 @@ jobs:
       #   run: |+
       #     terraform init
       #     run test:01-simple:plan
+      #
+
+      - uses: sersoft-gmbh/setup-gh-cli-action@v2
+        with:
+          version: latest
 
       - name: create a PR related to this
         id: pr
         shell: bash
         run: |+
-          pr=(gh pr list --json title,id -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .id // \"No match\"")
-          if [ "$response" = "No Match" ]; then
-            gh pr create \
-              --title "$GITHUB_PR_TITLE" \
-              --body "this PR once merged, audits, and tracks the terraform IAC changes made into ($current_branch) to the default branch"
+          gh --version
+          gh pr list --json title,number -q "map(select(.title == \"$GITHUB_PR_TITLE\"))"
+          gh pr list --json title,number -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first"
+          gh pr list --json title,number -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .number // \"Not Found\"" > pr_number.txt
+          echo "PRINTING: start"
+          cat pr_number.txt
+          echo "PRINTING: end"
 
-            pr=(gh pr list --json title,id -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .id // \"No match\"")
-          fi
+          pr=$(cat pr_number.txt)
+          echo "DEBUG: github PR title: $GITHUB_PR_TITLE"
+          test "$pr" = "Not Found" && echo "creating new PR" && gh pr create --title "$GITHUB_PR_TITLE" --body "this PR once merged, audits, and tracks the terraform IAC changes"
 
+          # if test "$pr" = "Not Found" ; then
+          #   echo "Creating new PR"
+          #
+          #   git commit -m "terraform plan job"
+          #
+          #   gh pr create --title "$GITHUB_PR_TITLE" --body "this PR once merged, audits, and tracks the terraform IAC changes made into $GITHUB_REF, prior to merging with default branch"
+          #
+          #   gh pr list --json title,number -q "map(select(.title == \"$GITHUB_PR_TITLE\"))"
+          #   pr=$(gh pr list --json title,number -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .number)
+          # fi
+
+          gh pr list --json title,number -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .number // \"Not Found\"" > pr_number.txt
+          pr=$(cat pr_number.txt)
+
+          echo "PR_ID: $pr"
           echo "pr_id=$pr" >> $GITHUB_OUTPUT
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ inputs.terraform_version }}
-
           terraform_wrapper: false
+
+      - name: Terraform Init
+        id: init
+        working-directory: ${{ inputs.dir }}
+        shell: bash
+        run: |
+          terraform init -reconfigure
 
       - name: Terraform Plan
         id: plan
