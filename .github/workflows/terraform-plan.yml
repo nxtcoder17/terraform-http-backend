@@ -56,15 +56,8 @@ jobs:
         shell: bash
         run: |+
           gh --version
-          gh pr list --json title,number -q "map(select(.title == \"$GITHUB_PR_TITLE\"))"
-          gh pr list --json title,number -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first"
-          gh pr list --json title,number -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .number // \"Not Found\"" > pr_number.txt
-          echo "PRINTING: start"
-          cat pr_number.txt
-          echo "PRINTING: end"
-
-          pr=$(cat pr_number.txt)
-          echo "DEBUG: github PR title: $GITHUB_PR_TITLE"
+          gh pr list --json title,number,id -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .number // \"Not Found\"" > pr_number.txt
+          gh pr list --json title,number,id -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .id // \"Not Found\"" > pr_id.txt
           test "$pr" = "Not Found" && echo "creating new PR" && gh pr create --title "$GITHUB_PR_TITLE" --body "this PR once merged, audits, and tracks the terraform IAC changes"
 
           # if test "$pr" = "Not Found" ; then
@@ -78,11 +71,14 @@ jobs:
           #   pr=$(gh pr list --json title,number -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .number)
           # fi
 
-          gh pr list --json title,number -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .number // \"Not Found\"" > pr_number.txt
-          pr=$(cat pr_number.txt)
+          gh pr list --json title,number,id -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .number // \"Not Found\"" > pr_number.txt
+          gh pr list --json title,number,id -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .id // \"Not Found\"" > pr_id.txt
+          pr_number=$(cat pr_number.txt)
+          pr_id=$(cat pr_id.txt)
 
-          echo "PR_ID: $pr"
-          echo "pr_id=$pr" >> $GITHUB_OUTPUT
+          echo "PR_ID: $pr_id | PR_NUMBER: $pr_number"
+          echo "pr_id=$pr_id" >> $GITHUB_OUTPUT
+          echo "pr_number=$pr_number" >> $GITHUB_OUTPUT
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -118,7 +114,7 @@ jobs:
         uses: peter-evans/create-or-update-comment@v2
         with:
           token: ${{ env.GITHUB_TOKEN }}
-          issue-number: ${{ steps.pr.outputs.pr_id }}
+          issue-number: ${{ steps.pr.outputs.pr_number }}
           body: |
             Terraform Plan:
 
