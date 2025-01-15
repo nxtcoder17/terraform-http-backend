@@ -24,7 +24,7 @@ env:
   GITHUB_PR_TITLE: "[terraform/IAC] ${{ inputs.dir }}"
 
 jobs:
-  tf-plan:
+  terraform-plan:
     runs-on: ubuntu-latest
     name: ${{ matrix.images.name }}
     steps:
@@ -58,6 +58,7 @@ jobs:
           gh --version
           gh pr list --json title,number,id -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .number // \"Not Found\"" > pr_number.txt
           gh pr list --json title,number,id -q "map(select(.title == \"$GITHUB_PR_TITLE\")) | first | .id // \"Not Found\"" > pr_id.txt
+
           test "$pr" = "Not Found" && echo "creating new PR" && gh pr create --title "$GITHUB_PR_TITLE" --body "this PR once merged, audits, and tracks the terraform IAC changes"
 
           # if test "$pr" = "Not Found" ; then
@@ -98,16 +99,28 @@ jobs:
         working-directory: ${{ inputs.dir }}
         shell: bash
         run: |
+          plan_dir="$PWD/.out"
+          mkdir $plan_dir
           echo 'plan<<EOF' >> $GITHUB_OUTPUT
-          terraform plan -no-color -out=tfplan >> $GITHUB_OUTPUT
+          terraform plan -no-color -out=$plan_dir/tfplan >> $GITHUB_OUTPUT
           echo 'EOF' >> $GITHUB_OUTPUT
+
+          echo "${{ inputs.dir }}" > $plan_dir/working-dir
+
+          echo "plan_dir=$plan_dir"
+          ls -al $plan_dir
+
+          echo "PLAN_DIR=$plan_dir" | tee -a $GITHUB_ENV | tee -a $GITHUB_OUTPUT
 
       - name: Save Artifact
         id: save-artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.pr.outputs.pr_id }}-tf-plan
-          path: ${{ inputs.dir }}/tfplan
+          name: ${{ steps.pr.outputs.pr_number }}-tf
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          path: |
+            ${{ steps.plan.outputs.PLAN_DIR }}/tfplan
+            ${{ steps.plan.outputs.PLAN_DIR }}/working-dir
 
       - name: Comment Plan
         id: comment-plan

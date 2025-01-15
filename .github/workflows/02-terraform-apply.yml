@@ -1,0 +1,114 @@
+name: terraform apply
+
+on:
+  pull_request_review:
+    types: [submitted]
+
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        type: int
+        description: "PR number"
+        required: true
+
+      terraform_version: 
+        description: 'Terraform Version'
+        required: true
+        default: 1.10.4
+
+permissions:
+  packages: write
+  contents: write
+  pull-requests: write
+
+env:
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+jobs:
+  terraform-apply:
+    runs-on: ubuntu-latest
+    if: github.event.review.state == 'approved' ||  github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Get PR branch (if workflow_dispatch)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |+
+          echo "PR_NUMBER=${{ inputs.pr_number }}" | tee -a $GITHUB_ENV | tee -a $GITHUB_OUTPUT
+          gh pr list --json headRefName,number -q "map(select(.number == ${{inputs.pr_number}} )) | first | .headRefName // \"Not Found\"" > pr_branch.txt
+          pr_branch=$(cat pr_branch.txt)
+          echo "PR_BRANCH=$pr_branch" | tee -a $GITHUB_ENV | tee -a $GITHUB_OUTPUT
+
+      - name: Get PR branch (if !workflow_dispatch)
+        if: ${{ github.event_name != 'workflow_dispatch' }}
+        run: |+
+          pr_number=$( echo ${{ github.ref }} | sed 's/refs[/]pull[/]//' | sed 's/[/]merge//' )
+          gh pr list --json headRefName,number -q "map(select(.number == $pr_number )) | first | .headRefName // \"Not Found\"" > pr_branch.txt
+          pr_branch=$(cat pr_branch.txt)
+
+          echo "PR_NUMBER=$pr_number" | tee -a $GITHUB_ENV | tee -a $GITHUB_OUTPUT
+          echo "PR_BRANCH=$pr_branch" | tee -a $GITHUB_ENV | tee -a $GITHUB_OUTPUT
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PR_BRANCH }}
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          terraform_wrapper: false
+
+
+      - name: Download Plan from github artifacts
+        id: download-plan
+        shell: bash
+        run: |+
+          run_id=$(gh run ls --workflow=01-terraform-plan.yml --json number,databaseId -q 'first | .databaseId')
+          gh run download $run_id -n ${{env.PR_NUMBER}}-tf -D ./out
+
+        # uses: actions/download-artifact@v4
+        # with:
+        #   name: ${{ env.PR_NUMBER }}-tf
+        #   path: ./out
+        #   github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: ls
+        shell: bash
+        run: |+
+          ls -al ./out
+
+      - name: Terraform Init
+        id: init
+        shell: bash
+        run: |
+          pushd $(cat out/working-dir)
+          terraform init
+          popd
+
+      - name: Terraform Apply
+        id: apply
+        shell: bash
+        run: |
+          tfplan="$PWD/out/tfplan"
+          pushd $(cat out/working-dir)
+          echo 'apply<<EOF' >> $GITHUB_OUTPUT
+          terraform apply -input=false -no-color $tfplan >> $GITHUB_OUTPUT
+          echo 'EOF' >> $GITHUB_OUTPUT
+          popd
+
+      - name: Comment Apply
+        id: comment-apply
+        uses: peter-evans/create-or-update-comment@v2
+        with:
+          token: ${{ env.GITHUB_TOKEN }}
+          issue-number: ${{ env.PR_NUMBER }}
+          body: |
+            Terraform Apply:
+
+            ```
+            ${{ steps.apply.outputs.apply }}
+            ```
+
