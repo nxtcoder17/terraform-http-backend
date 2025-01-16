@@ -32,83 +32,97 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Get PR branch (if workflow_dispatch)
-        if: ${{ github.event_name == 'workflow_dispatch' }}
-        run: |+
-          echo "PR_NUMBER=${{ inputs.pr_number }}" | tee -a $GITHUB_ENV | tee -a $GITHUB_OUTPUT
-          gh pr list --json headRefName,number -q "map(select(.number == ${{inputs.pr_number}} )) | first | .headRefName // \"Not Found\"" > pr_branch.txt
-          pr_branch=$(cat pr_branch.txt)
-          echo "PR_BRANCH=$pr_branch" | tee -a $GITHUB_ENV | tee -a $GITHUB_OUTPUT
+      - name: Fail Workflow if secrets not defined
+        shell: bash
+        run: |
+          if [ -z "${{ secrets.ENCRYPTION_PASSWORD }}" ]; then
+            echo "Error: secret ENCRYPTION_PASSWORD is missing. This secret must be set, to decrypt the downloaded terraform plan file" >&2
+            exit 1
+          fi
 
-      - name: Get PR branch (if !workflow_dispatch)
-        if: ${{ github.event_name != 'workflow_dispatch' }}
-        run: |+
-          pr_number=$( echo ${{ github.ref }} | sed 's/refs[/]pull[/]//' | sed 's/[/]merge//' )
-          gh pr list --json headRefName,number -q "map(select(.number == $pr_number )) | first | .headRefName // \"Not Found\"" > pr_branch.txt
-          pr_branch=$(cat pr_branch.txt)
-
-          echo "PR_NUMBER=$pr_number" | tee -a $GITHUB_ENV | tee -a $GITHUB_OUTPUT
-          echo "PR_BRANCH=$pr_branch" | tee -a $GITHUB_ENV | tee -a $GITHUB_OUTPUT
+      - name: Get PR Branch
+        uses: nxtcoder17/actions/pull-request-branch@feat/tf-issues-and-pr
+        id: pr
+        with:
+          github_token: ${{ env.GITHUB_TOKEN }}
+          # inputs.pr_number will only be set, when using workflow-dispatch
+          pull_request_number: ${{ inputs.pr_number }}
 
       - name: Checkout
         uses: actions/checkout@v4
         with:
-          ref: ${{ env.PR_BRANCH }}
+          ref: ${{ steps.pr.outputs.PR_BRANCH }}
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
+      - name: Download Created Plan
+        uses: nxtcoder17/actions/download-workflow-artifact@feat/tf-issues-and-pr
         with:
-          terraform_version: ${{ inputs.terraform_version }}
-          terraform_wrapper: false
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow_name: 01-terraform-plan.yml
+          artifact_name: ${{ steps.pr.outputs.PR_NUMBER }}-tf
+          destination: ".tfplan"
 
-
-      - name: Download Plan from github artifacts
-        id: download-plan
+      - name: Decrypt Downloaded Terraform Plan file
         shell: bash
-        run: |+
-          run_id=$(gh run ls --workflow=01-terraform-plan.yml --json number,databaseId -q 'first | .databaseId')
-          gh run download $run_id -n ${{env.PR_NUMBER}}-tf -D ./out
+        id: plan-output
+        run: |
+          pushd .tfplan
+          openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in tfplan -out "tfplan.dec" -pass pass:"${{ secrets.ENCRYTPTION_PASSWORD }}"
+          mv tfplan.dec tfplan
+          popd
 
-        # uses: actions/download-artifact@v4
-        # with:
-        #   name: ${{ env.PR_NUMBER }}-tf
-        #   path: ./out
-        #   github-token: ${{ secrets.GITHUB_TOKEN }}
+          echo "TF_WORKING_DIR=$(cat .tfplan/tf-working-dir)" | tee -a $GITHUB_ENV
+          echo "TF_PLAN_FILE=$(echo $PWD/.tfplan/tfplan)" | tee -a $GITHUB_ENV
 
-      - name: ls
-        shell: bash
-        run: |+
-          ls -al ./out
-
-      - name: Terraform Init
-        id: init
+      - name: Decrypt terraform state (if present)
         shell: bash
         run: |
-          pushd $(cat out/working-dir)
-          terraform init
+          pushd ${{ env.TF_WORKING_DIR }}
+
+          if [ -f terraform.tfstate ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -in terraform.tfstate -out "terraform.tfstate.dec" -pass pass:"${{ secrets.ENCRYTPTION_PASSWORD }}"
+            mv terraform.tfstate.dec terraform.tfstate
+          fi
           popd
 
       - name: Terraform Apply
+        uses: nxtcoder17/actions/terraform-apply@feat/tf-issues-and-pr
         id: apply
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          working_directory: ${{ env.TF_WORKING_DIR }}
+          plan_file: ${{ env.TF_PLAN_FILE }}
+
+      - name: Encrypt terraform state
         shell: bash
         run: |
-          tfplan="$PWD/out/tfplan"
-          pushd $(cat out/working-dir)
-          echo 'apply<<EOF' >> $GITHUB_OUTPUT
-          terraform apply -input=false -no-color $tfplan >> $GITHUB_OUTPUT
-          echo 'EOF' >> $GITHUB_OUTPUT
+          pushd ${{ env.TF_WORKING_DIR }}
+          # aes-256-gcm did not work
+          openssl enc -aes-256-cbc -pbkdf2 -iter 600000 -in terraform.tfstate -out "terraform.tfstate.enc" -pass pass:"${{ secrets.ENCRYTPTION_PASSWORD }}"
+          mv terraform.tfstate.enc terraform.tfstate
           popd
 
-      - name: Comment Apply
-        id: comment-apply
-        uses: peter-evans/create-or-update-comment@v2
+        # Step 6: Pushing Encrypted State File Back to PR Branch
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit and Push Encrypted State File
+        run: |
+          git add ${{ env.TF_WORKING_DIR }}/terraform.tfstate
+          git commit -m "Update encrypted Terraform state file"
+          git push
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Comment on PR
+        uses: nxtcoder17/actions/issue-comment@feat/tf-issues-and-pr
         with:
-          token: ${{ env.GITHUB_TOKEN }}
-          issue-number: ${{ env.PR_NUMBER }}
+          github_token: ${{ inputs.GITHUB_TOKEN }}
+          issue_number: ${{ steps.pr.outputs.PR_NUMBER }}
           body: |
             Terraform Apply:
 
             ```
-            ${{ steps.apply.outputs.apply }}
+            ${{ steps.apply.outputs.TF_APPLY_STDOUT }}
             ```
-
